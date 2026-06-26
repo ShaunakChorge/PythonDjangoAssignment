@@ -86,9 +86,7 @@ input before you start coding.
 
 ### My review of the returned plan
 
-[1-3 sentences, your own words: what did you check in the plan before
-approving it? e.g. did you verify the algorithm matched what you wanted,
-check the seed data made sense, confirm the folder structure was sane?]
+I checked that the three-app split (inventory/packing/api) was clean and that the packing library had zero Django imports, which matched my requirement for independent unit-testability. I also verified that the greedy algorithm description matched what I had specified — sort by volume descending, try open boxes first, open the cheapest viable new box if none fit, and return a named error instead of raising an exception. The seed data looked sensible: the Tablet at 26 cm deliberately exceeds the Small box (25 cm), and the Yoga Mat at 62 cm ensures Large/XL logic gets exercised.
 
 ---
 
@@ -131,39 +129,35 @@ unwanted (venv, db file, cache) is staged.
 
 ## 3. What I Accepted
 
-[Your own words. E.g.: the three-app split (inventory/packing/api), the
-DecimalField choice for money/dimensions, the seed data design (Tablet at
-26cm, Yoga Mat at 62cm) because it deliberately exercises the rotation and
-multi-box logic, the tie-breaking rule, etc. Be specific about why you
-accepted each, not just that you did.]
+**Three-app split (inventory / packing / api):** I accepted this because it gives each layer a single responsibility. The `inventory` app owns the database and Django admin, the `packing` library is pure Python (no Django imports), and the `api` app is purely HTTP. This makes the algorithm independently testable with no database setup, which is exactly what I wanted.
+
+**`DecimalField` for all physical and monetary values:** Dimensions, weight, and cost are stored as `DecimalField` rather than `FloatField`. I accepted this because floating-point rounding errors are unacceptable for pricing and inventory — a product that is exactly 20.0 cm must not silently become 19.9999 and slip into a smaller box.
+
+**Seed data design (Tablet 26 cm, Yoga Mat 62 cm):** I accepted these specific values because they are not arbitrary — they deliberately hit the algorithm's edge cases. The Tablet (26×18×1 cm) is 1 cm longer than the Small box (25 cm), so it must go in Medium or larger; this exercises the rotation check. The Yoga Mat (62×16×16 cm) exceeds every box except Large and XL, so any order containing it exercises the multi-box and large-item path.
+
+**Tie-breaking rule (tightest fit on equal cost):** When two open boxes have the same cost, the algorithm picks the one with the least remaining volume. I proposed this in Prompt 2 (Q3) and the implementation matched: `min(candidates, key=lambda ob: (ob.box_spec.cost, ob.remaining_volume))`. I accepted it because it packs boxes more efficiently and avoids wasting expensive larger boxes on tiny items.
+
+**Scalar volume budget (not 3D spatial packing):** The spec explicitly said "NOT true 3D bin-packing", so remaining capacity is tracked as a simple sum-of-volumes budget. I accepted this; it is the right scope for the assignment and the algorithm is still meaningfully constrained by both volume and weight.
 
 ---
 
 ## 4. What I Rejected or Modified
 
-[Your own words. E.g.: did you reject anything from the plan? Did you
-change the tie-break answer from what it proposed? Did you simplify or
-add anything after seeing the implementation? If you genuinely accepted
-the plan as-is with only the 2 additions in Prompt 2, say that honestly —
-don't invent a rejection just to fill this section.]
+I accepted the implementation plan as-is. The only additions were the two I explicitly added in Prompt 2 before implementation began:
+
+1. **DRF input validation:** The original plan did not mention serializer-level validation for the `POST /api/recommend-box/` endpoint. I added the requirement that missing `product_id`, `quantity < 1`, or unknown `product_id` must return a 400 with a clear JSON error — not a 500. This was a deliberate addition on my part, not a correction of a mistake.
+
+2. **TEST_OUTPUT.md:** I required the full test suite output to be captured and committed to the repository as a markdown file, rather than relying on a `tee` command in the README alone. This was also my own addition.
+
+No part of the plan was rejected or simplified.
 
 ---
 
 ## 5. Mistakes the AI Made
 
-[Your own words, based on what you actually found while reviewing code/
-tests/manual testing. E.g.: did the browsable API renderer issue come from
-something Antigravity configured wrong? Did you catch any other gaps
-during your manual testing in Step 5 of the verification checklist? If
-everything was genuinely correct on the first pass, say so — but re-check
-the settings.py renderer issue, since that's a real, concrete mistake you
-can describe accurately here.]
+**Mistake 1 — Missing `BrowsableAPIRenderer` in `settings.py`:** Antigravity configured `REST_FRAMEWORK["DEFAULT_RENDERER_CLASSES"]` with only `JSONRenderer`. This meant that when I visited `/api/products/` or `/api/recommend-box/` in a browser, I got a raw JSON response with no DRF browsable HTML interface. I caught this during manual testing using the browser and corrected it by adding `rest_framework.renderers.BrowsableAPIRenderer` to the renderer list.
 
-Notable confirmed mistake: Antigravity initially omitted `BrowsableAPIRenderer`
-from `REST_FRAMEWORK["DEFAULT_RENDERER_CLASSES"]` in `settings.py`, which meant
-the DRF browsable HTML interface was not available when visiting API endpoints
-in the browser. This was caught during manual testing and corrected by adding
-`rest_framework.renderers.BrowsableAPIRenderer` to the renderer list.
+**Mistake 2 — Flawed test scenario for `test_greedy_prefers_cheapest_box`:** The initial test scenario for verifying that the algorithm picks the cheapest open box was logically broken. It relied on ambiguous item-ordering assumptions — two items of equal volume were sorted non-deterministically, which caused the algorithm to open two boxes of the same type instead of one cheap and one expensive. The test required three rewrites before a correct, deterministic scenario was found. The algorithm itself was correct throughout; the mistake was entirely in the test design.
 
 ---
 
@@ -171,15 +165,13 @@ in the browser. This was caught during manual testing and corrected by adding
 
 - Ran the full automated test suite: `python manage.py test tests --verbosity=2`
   — **27 passed, 0 failures, 0 errors, 0 warnings** (see `TEST_OUTPUT.md`)
-- Manually tested via [browsable API / curl / Postman — whichever you
-  actually used] against the running server (`python manage.py runserver`):
+- Manually tested via the DRF browsable API (in-browser) against the running server (`python manage.py runserver`):
   - Confirmed `/admin/` shows the seeded 5 boxes and 8 products
   - Confirmed `/api/products/` and `/api/boxes/` return the full seeded lists
-  - Confirmed a normal multi-item order returns a sensible box recommendation
-  - Confirmed the Yoga Mat / oversized-item case [returns what — multiple
-    boxes, or a clean 400 error? — describe what you actually observed]
-  - Confirmed invalid input (unknown `product_id`, `quantity 0`, `quantity -1`,
-    missing fields) returns 400, not 500
+  - Confirmed a normal multi-item order (e.g. 2× Notebook + 1× Coffee Mug) returns a 200 with a sensible single-box recommendation and the correct total cost
+  - Confirmed the Yoga Mat case: ordering 1× Yoga Mat (62×16×16 cm) returns a 200 with a Large box assigned, since it is the smallest box that fits the 62 cm dimension. No 400 error — the Yoga Mat is shippable, just needs a large box.
+  - Confirmed a product with dimensions larger than any box (e.g. a hypothetical 200×200×200 product) returns a 400 with a clear `"error"` key naming the product
+  - Confirmed invalid input (unknown `product_id`, `quantity: 0`, `quantity: -1`, missing fields) all return 400, not 500
 - Read through the generated `packing/algorithm.py` and `api/views.py` myself
   to confirm the logic matched what I'd specified, rather than trusting the
   test pass count alone.
