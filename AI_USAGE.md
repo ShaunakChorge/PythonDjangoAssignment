@@ -1,4 +1,194 @@
-# Chat Conversation
+# AI Usage Disclosure
+
+## 1. AI Tools Used
+
+**Claude (Anthropic)** — used to plan the project scope, design the data
+model and algorithm approach, and draft the two prompts given to Antigravity.
+
+**Antigravity** — used as the implementation agent. Given a detailed spec,
+it produced an implementation plan first (reviewed before any code was
+written), then implemented the full Django project, tests, and docs.
+
+---
+
+## 2. Prompts Given
+
+### Prompt 1 (to Antigravity — spec & plan request)
+
+```
+I'm building a Django + DRF backend for an "AI-Assisted Box Selection System"
+as a hiring assignment. Here is the full spec. Please produce an implementation
+plan only — do not write code yet. I will review and comment on the plan before
+you proceed.
+
+CONTEXT
+An ecommerce warehouse needs to pick the right shipping box(es) for an order.
+Each product has dimensions (length, width, height) and weight. Each box has
+internal dimensions, a max weight capacity, and a cost.
+
+DATA MODELS
+- Product: name, length, width, height, weight (all positive floats)
+- Box: name, internal_length, internal_width, internal_height, max_weight, cost
+- Order: created_at (no customer info needed)
+- OrderItem: order (FK), product (FK), quantity
+
+Seed ~5 boxes (small to large, varying cost) and ~8 products (varying sizes)
+via a Django data migration, so the app is usable immediately after `migrate`.
+Register Product and Box in Django admin for visibility/editing.
+
+CORE ALGORITHM (plain Python module, decoupled from Django models so it's
+independently unit-testable — accept simple dataclasses/dicts as input)
+1. "Does product fit in box" check: try all 6 axis-aligned rotations of the
+   product's L/W/H against the box's internal L/W/H; fits if any rotation has
+   all three dimensions <= the box's corresponding dimensions.
+2. Multi-item, multi-box assignment via greedy approach:
+   - Expand order items by quantity into individual units.
+   - Sort units by volume descending.
+   - Maintain a list of "open boxes" (box type + running used-volume +
+     running used-weight + items placed).
+   - For each unit: among currently open boxes where this unit's chosen
+     rotation still fits within remaining volume AND remaining weight
+     capacity, pick the one with lowest cost; if none, open a new box
+     (cheapest box type, among all box types, that can physically fit this
+     unit when empty) and place the unit there.
+   - If no box type can fit a given unit at all (even empty), return a clear
+     error naming which product can't be shipped.
+   - Output: list of boxes used, which product+quantity went in each, and
+     total cost.
+3. This is intentionally a volume/weight-budget greedy heuristic, NOT true 3D
+   bin-packing with spatial placement — please don't implement spatial packing,
+   that's out of scope.
+
+API (Django REST Framework)
+- POST /api/recommend-box/ — body: list of {product_id, quantity} → response:
+  boxes used, contents per box, total cost (or a 400 with a clear error if
+  something can't be shipped).
+- GET /api/products/ and GET /api/boxes/ — simple read-only list endpoints.
+
+TESTS
+- Unit tests for the rotation-fit check, including a case that only fits after
+  rotation.
+- Unit tests for the greedy assignment: a case needing one box, a case needing
+  two boxes because items don't all fit in one, and a case where no box fits
+  any orientation (expect a clean error, not an exception).
+- API test for /api/recommend-box/ covering a valid request and the no-fit
+  error path.
+
+DELIVERABLES I NEED FROM THIS PROJECT (for my own tracking, not part of your
+plan's code)
+README.md, requirements.txt, .gitignore, a runnable test suite, and a way to
+capture full terminal test output to a text file.
+
+Please give me: proposed folder/app structure, the order you'll implement
+things in, and any clarifying questions or assumptions you think need my
+input before you start coding.
+```
+
+### My review of the returned plan
+
+[1-3 sentences, your own words: what did you check in the plan before
+approving it? e.g. did you verify the algorithm matched what you wanted,
+check the seed data made sense, confirm the folder structure was sane?]
+
+---
+
+### Prompt 2 (to Antigravity — refinements & go-ahead)
+
+```
+Proceed with the implementation plan.
+Plan approved. Answers to your questions:
+
+Q1: Latest stable Python/Django is fine.
+Q2: SQLite, as planned.
+Q3: Keep your default — tightest fit (least remaining volume) on cost ties.
+Q4: Confirmed, per-unit expansion and per-unit weight check is correct.
+Q5: The tee one-liner in the README is sufficient, no separate script needed.
+
+Two additions before you implement:
+
+1. Validate API input with DRF serializers — reject missing product_id,
+   quantity < 1, or unknown product_id, with a 400 and a clear message, not
+   a 500.
+2. After all tests pass, run the full suite with the tee command and save
+   the actual output to TEST_OUTPUT.md (wrap it in a code block) so it's
+   committed in the repo, not just left in my terminal history.
+
+Go ahead and implement everything end to end. Let me know when it's done and
+tests are passing.
+```
+
+### Prompt 3 (to Antigravity — git push)
+
+```
+Initialize git in this project, ensure .gitignore excludes venv/, db.sqlite3,
+__pycache__/, and *.pyc, then create an initial commit and push to
+https://github.com/ShaunakChorge/PythonDjangoAssignment.git on branch main.
+Show me the git status output before committing so I can confirm nothing
+unwanted (venv, db file, cache) is staged.
+```
+
+---
+
+## 3. What I Accepted
+
+[Your own words. E.g.: the three-app split (inventory/packing/api), the
+DecimalField choice for money/dimensions, the seed data design (Tablet at
+26cm, Yoga Mat at 62cm) because it deliberately exercises the rotation and
+multi-box logic, the tie-breaking rule, etc. Be specific about why you
+accepted each, not just that you did.]
+
+---
+
+## 4. What I Rejected or Modified
+
+[Your own words. E.g.: did you reject anything from the plan? Did you
+change the tie-break answer from what it proposed? Did you simplify or
+add anything after seeing the implementation? If you genuinely accepted
+the plan as-is with only the 2 additions in Prompt 2, say that honestly —
+don't invent a rejection just to fill this section.]
+
+---
+
+## 5. Mistakes the AI Made
+
+[Your own words, based on what you actually found while reviewing code/
+tests/manual testing. E.g.: did the browsable API renderer issue come from
+something Antigravity configured wrong? Did you catch any other gaps
+during your manual testing in Step 5 of the verification checklist? If
+everything was genuinely correct on the first pass, say so — but re-check
+the settings.py renderer issue, since that's a real, concrete mistake you
+can describe accurately here.]
+
+Notable confirmed mistake: Antigravity initially omitted `BrowsableAPIRenderer`
+from `REST_FRAMEWORK["DEFAULT_RENDERER_CLASSES"]` in `settings.py`, which meant
+the DRF browsable HTML interface was not available when visiting API endpoints
+in the browser. This was caught during manual testing and corrected by adding
+`rest_framework.renderers.BrowsableAPIRenderer` to the renderer list.
+
+---
+
+## 6. How I Verified the Final Code
+
+- Ran the full automated test suite: `python manage.py test tests --verbosity=2`
+  — **27 passed, 0 failures, 0 errors, 0 warnings** (see `TEST_OUTPUT.md`)
+- Manually tested via [browsable API / curl / Postman — whichever you
+  actually used] against the running server (`python manage.py runserver`):
+  - Confirmed `/admin/` shows the seeded 5 boxes and 8 products
+  - Confirmed `/api/products/` and `/api/boxes/` return the full seeded lists
+  - Confirmed a normal multi-item order returns a sensible box recommendation
+  - Confirmed the Yoga Mat / oversized-item case [returns what — multiple
+    boxes, or a clean 400 error? — describe what you actually observed]
+  - Confirmed invalid input (unknown `product_id`, `quantity 0`, `quantity -1`,
+    missing fields) returns 400, not 500
+- Read through the generated `packing/algorithm.py` and `api/views.py` myself
+  to confirm the logic matched what I'd specified, rather than trusting the
+  test pass count alone.
+
+---
+
+---
+
+# Chat Conversation (Full Transcript)
 
 Note: _This is purely the output of the chat conversation and does not contain any raw data, codebase snippets, etc. used to generate the output._
 
